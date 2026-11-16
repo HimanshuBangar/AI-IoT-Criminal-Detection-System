@@ -1,11 +1,8 @@
+
 import cv2
 import numpy as np
 from pathlib import Path
 
-
-# ==========================================
-# 1. LOAD FACE DETECTOR
-# ==========================================
 
 def load_face_detector():
     cascade_path = (
@@ -21,48 +18,69 @@ def load_face_detector():
     return detector
 
 
-# ==========================================
-# 2. DETECT FACES IN IMAGE OR VIDEO FRAME
-# ==========================================
-
 def detect_faces(frame):
     detector = load_face_detector()
 
-    gray = cv2.cvtColor(
-        frame,
-        cv2.COLOR_BGR2GRAY
-    )
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    faces = detector.detectMultiScale(
+    return detector.detectMultiScale(
         gray,
         scaleFactor=1.1,
         minNeighbors=5,
         minSize=(40, 40)
     )
 
-    return faces
 
+# Custom recognizer: does not require cv2.face
+class CustomFaceRecognizer:
 
-# ==========================================
-# 3. CREATE FACE RECOGNIZER
-# ==========================================
+    def __init__(self):
+        self.histograms = []
+        self.labels = []
 
-def create_face_recognizer():
+    def get_histogram(self, face):
+        face = cv2.equalizeHist(face)
 
-    if not hasattr(cv2, "face"):
-        raise RuntimeError(
-            "OpenCV face module is unavailable. "
-            "Install opencv-contrib-python."
+        histogram = cv2.calcHist(
+            [face], [0], None, [256], [0, 256]
         )
 
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
+        cv2.normalize(histogram, histogram)
 
-    return recognizer
+        return histogram
+
+    def train(self, images, labels):
+        self.histograms = [
+            self.get_histogram(image) for image in images
+        ]
+        self.labels = np.asarray(labels)
+
+    def predict(self, face):
+        if not self.histograms:
+            return -1, 100.0
+
+        histogram = self.get_histogram(face)
+
+        distances = [
+            cv2.compareHist(
+                histogram,
+                stored,
+                cv2.HISTCMP_BHATTACHARYYA
+            )
+            for stored in self.histograms
+        ]
+
+        best_index = int(np.argmin(distances))
+
+        return (
+            int(self.labels[best_index]),
+            float(distances[best_index] * 100)
+        )
 
 
-# ==========================================
-# 4. TRAIN MODEL USING REFERENCE PHOTOS
-# ==========================================
+def create_face_recognizer():
+    return CustomFaceRecognizer()
+
 
 def train_face_recognizer(reference_dir):
 
@@ -74,7 +92,6 @@ def train_face_recognizer(reference_dir):
         )
 
     recognizer = create_face_recognizer()
-
     detector = load_face_detector()
 
     face_images = []
@@ -89,8 +106,7 @@ def train_face_recognizer(reference_dir):
             continue
 
         person_name = person_folder.name
-
-        label_map[current_label] = person_name
+        person_faces = []
 
         for image_path in person_folder.iterdir():
 
@@ -105,8 +121,7 @@ def train_face_recognizer(reference_dir):
                 continue
 
             gray = cv2.cvtColor(
-                image,
-                cv2.COLOR_BGR2GRAY
+                image, cv2.COLOR_BGR2GRAY
             )
 
             faces = detector.detectMultiScale(
@@ -119,25 +134,26 @@ def train_face_recognizer(reference_dir):
             if len(faces) == 0:
                 continue
 
-            # Use the largest detected face
             x, y, w, h = max(
                 faces,
                 key=lambda face: face[2] * face[3]
             )
 
             face = gray[y:y+h, x:x+w]
+            face = cv2.resize(face, (200, 200))
 
-            face = cv2.resize(
-                face,
-                (200, 200)
-            )
+            person_faces.append(face)
 
-            face_images.append(face)
-            face_labels.append(current_label)
+        if person_faces:
+            label_map[current_label] = person_name
 
-        current_label += 1
+            for face in person_faces:
+                face_images.append(face)
+                face_labels.append(current_label)
 
-    if len(face_images) == 0:
+            current_label += 1
+
+    if not face_images:
         return None, {}
 
     recognizer.train(
@@ -147,10 +163,6 @@ def train_face_recognizer(reference_dir):
 
     return recognizer, label_map
 
-
-# ==========================================
-# 5. RECOGNIZE FACES
-# ==========================================
 
 def recognize_faces(
     frame,
@@ -165,8 +177,7 @@ def recognize_faces(
     detector = load_face_detector()
 
     gray = cv2.cvtColor(
-        frame,
-        cv2.COLOR_BGR2GRAY
+        frame, cv2.COLOR_BGR2GRAY
     )
 
     faces = detector.detectMultiScale(
@@ -181,20 +192,16 @@ def recognize_faces(
     for (x, y, w, h) in faces:
 
         face = gray[y:y+h, x:x+w]
-
-        face = cv2.resize(
-            face,
-            (200, 200)
-        )
+        face = cv2.resize(face, (200, 200))
 
         label, confidence = recognizer.predict(face)
 
-        if confidence <= threshold:
-            name = label_map.get(label, "Unknown")
-            matched = True
-        else:
-            name = "Unknown"
-            matched = False
+        matched = confidence <= threshold
+
+        name = (
+            label_map.get(label, "Unknown")
+            if matched else "Unknown"
+        )
 
         results.append({
             "name": name,

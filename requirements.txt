@@ -1,8 +1,7 @@
-
 streamlit
 opencv-contrib-python-headless==4.11.0.86
-ultralytics
-numpy
+ultralytics==8.4.215
+numpy<2
 pandas
 Pillow
 pyserial
